@@ -1,6 +1,6 @@
 # Philips Hue BLE Light Controller
 
-FstaAPI web server for controlling Philips Hue ambiance lamp over Bluetooth Low Energy (BLE).
+FstaAPI web server for controlling Philips Hue lightbulb over Bluetooth Low Energy (BLE).
 
 I created this because I refuse to sign the long ToS "updates" and "privacy policy" Philips was trying to force me to agree to in order to continue using my goddamn light bulb. And I much prefer this controller over the official Hue app because it's simple, unrestricted, and fully functional - turn on/off, change brightness, and change temperature.
 
