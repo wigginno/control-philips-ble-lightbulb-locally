@@ -1,0 +1,11 @@
+[project]
+name = "light"
+version = "0.1.0"
+description = "FstaAPI web server for controlling Philips Hue ambiance lamp over Bluetooth Low Energy (BLE)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "bleak>=1.1.1",
+    "fastapi[standard]>=0.119.1",
+    "uvicorn>=0.38.0",
+]
