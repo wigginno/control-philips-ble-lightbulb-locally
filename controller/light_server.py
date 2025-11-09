@@ -6,10 +6,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from bleak import BleakClient, BleakScanner
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 DEVICE_NAME = "Hue ambiance lamp"
@@ -18,9 +18,10 @@ BRIGHTNESS_UUID = "932c32bd-0003-47a2-835a-a8d455b859dd"
 TEMPERATURE_UUID = "932c32bd-0004-47a2-835a-a8d455b859dd"
 
 _is_on = True
-_brightness: int = 0
-_temp: int = 0
+_brightness = 0
+_temp = 0
 client: Optional[BleakClient] = None
+
 
 async def get_client():
     global client
@@ -32,6 +33,7 @@ async def get_client():
             await client.connect()
     return client
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # Startup: Connect once on startup
@@ -41,11 +43,14 @@ async def lifespan(_app: FastAPI):
     if client and client.is_connected:
         await client.disconnect()
 
+
 app = FastAPI(lifespan=lifespan)
+
 
 @app.get("/favicon.svg")
 async def favicon():
     from fastapi.responses import Response
+
     svg = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
 <circle cx="50" cy="50" r="48" fill="#ffd700"/>
 <path d="M50 20 C35 20 25 30 25 45 C25 55 30 62 35 68 L35 75 C35 78 37 80 40 80 L60 80 C63 80 65 78 65 75 L65 68 C70 62 75 55 75 45 C75 30 65 20 50 20 Z" fill="#fff"/>
@@ -54,10 +59,12 @@ async def favicon():
 </svg>"""
     return Response(content=svg, media_type="image/svg+xml")
 
+
 @app.get("/favicon.ico")
 async def favicon_ico():
     from fastapi.responses import Response
     import base64
+
     # Simple PNG light bulb icon (32x32, base64 encoded)
     png_data = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAjRJREFU"
@@ -76,9 +83,10 @@ async def favicon_ico():
     )
     return Response(content=png_data, media_type="image/x-icon")
 
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    return '''
+    return """
 <!DOCTYPE html>
 <html>
 <head>
@@ -202,7 +210,8 @@ async def index():
     </script>
 </body>
 </html>
-    '''
+    """
+
 
 @app.get("/toggle")
 async def toggle():
@@ -217,6 +226,7 @@ async def toggle():
     _is_on = not _is_on
     return {"state": _is_on}
 
+
 @app.get("/brightness")
 async def brightness(value: int):
     global _brightness
@@ -224,13 +234,16 @@ async def brightness(value: int):
     logger.info(f"{x}: brightness({value})")
     c = await get_client()
     if c is None:
-        logger.error(f"{x}: brightness({value}): Failed to establish client connection.")
+        logger.error(
+            f"{x}: brightness({value}): Failed to establish client connection."
+        )
         return {"brightness": _brightness}
     logger.info(f"brightness({value}): established client connection")
     await c.write_gatt_char(BRIGHTNESS_UUID, bytearray([value]))
     logger.info(f"{x}: Brightness: {_brightness} -> {value}")
     _brightness = value
     return {"brightness": _brightness}
+
 
 @app.get("/temperature")
 async def temperature(value: int):
@@ -239,7 +252,9 @@ async def temperature(value: int):
     logger.info(f"{x}: temperature({value})")
     c = await get_client()
     if c is None:
-        logger.error(f"{x}: temperature({value}): Failed to establish client connection.")
+        logger.error(
+            f"{x}: temperature({value}): Failed to establish client connection."
+        )
         return {"temperature": _temp}
     logger.info(f"{x}: temperature({value}): established client connection")
     await c.write_gatt_char(TEMPERATURE_UUID, bytearray([value, 0x01]))
