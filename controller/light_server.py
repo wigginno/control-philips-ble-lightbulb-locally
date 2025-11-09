@@ -1,10 +1,9 @@
 from typing import Optional
 import logging
-from random import choices
-from string import ascii_letters
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi_utils.tasks import repeat_every
 from bleak import BleakClient, BleakScanner
 
 logger = logging.getLogger(__name__)
@@ -20,6 +19,9 @@ TEMPERATURE_UUID = "932c32bd-0004-47a2-835a-a8d455b859dd"
 _is_on = True
 _brightness = 0
 _temp = 0
+_new_is_on = True
+_new_brightness = 0
+_new_temp = 0
 client: Optional[BleakClient] = None
 
 
@@ -36,8 +38,11 @@ async def get_client():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Startup: Connect once on startup
+    # Startup
+    # Connect to the bulb
     await get_client()
+    # Start repeated task to update on/off/brightness/temp every 0.25s
+    await update_bulb()
     yield
     # Shutdown: Disconnect if connected
     if client and client.is_connected:
@@ -213,51 +218,43 @@ async def index():
     """
 
 
-@app.get("/toggle")
-async def toggle():
-    global _is_on
-    x = "".join(choices(ascii_letters, k=4))
-    logger.info(f"{x}: toggle()")
+@repeat_every(seconds=0.25)
+async def update_bulb():
+    global _is_on, _brightness, _temp, _new_is_on, _new_brightness, _new_temp
     c = await get_client()
     if c is None:
-        logger.error(f"{x}: Failed to establish client connection.")
-        return {"state": _is_on}
-    await c.write_gatt_char(LIGHT_UUID, bytearray([0x00 if _is_on else 0x01]))
-    _is_on = not _is_on
-    return {"state": _is_on}
+        logger.error("Failed to establish client connection")
+    elif _is_on != _new_is_on:
+        signal = 0x00 if _is_on else 0x01
+        await c.write_gatt_char(LIGHT_UUID, bytearray([signal]))
+        logger.info("Toggled on/off state")
+        _is_on = _new_is_on
+    elif _brightness != _new_brightness:
+        await c.write_gatt_char(BRIGHTNESS_UUID, bytearray([_new_brightness]))
+        logger.info(f"Brightness {_brightness} -> {_new_brightness}")
+        _brightness = _new_brightness
+    elif _temp != _new_temp:
+        await c.write_gatt_char(TEMPERATURE_UUID, bytearray([_new_temp, 0x01]))
+        logger.info(f"Changed temperature from {_temp} to {_new_temp}")
+        _temp = _new_temp
+
+
+@app.get("/toggle")
+async def toggle():
+    global _new_is_on
+    _new_is_on = not _new_is_on
+    return {"state": _new_is_on}
 
 
 @app.get("/brightness")
 async def brightness(value: int):
-    global _brightness
-    x = "".join(choices(ascii_letters, k=4))
-    logger.info(f"{x}: brightness({value})")
-    c = await get_client()
-    if c is None:
-        logger.error(
-            f"{x}: brightness({value}): Failed to establish client connection."
-        )
-        return {"brightness": _brightness}
-    logger.info(f"brightness({value}): established client connection")
-    await c.write_gatt_char(BRIGHTNESS_UUID, bytearray([value]))
-    logger.info(f"{x}: Brightness: {_brightness} -> {value}")
-    _brightness = value
-    return {"brightness": _brightness}
+    global _new_brightness
+    _new_brightness = value
+    return {"brightness": _new_brightness}
 
 
 @app.get("/temperature")
 async def temperature(value: int):
-    global _temp
-    x = "".join(choices(ascii_letters, k=4))
-    logger.info(f"{x}: temperature({value})")
-    c = await get_client()
-    if c is None:
-        logger.error(
-            f"{x}: temperature({value}): Failed to establish client connection."
-        )
-        return {"temperature": _temp}
-    logger.info(f"{x}: temperature({value}): established client connection")
-    await c.write_gatt_char(TEMPERATURE_UUID, bytearray([value, 0x01]))
-    logger.info(f"{x}: Temperature: {_temp} -> {value}")
-    _temp = value
-    return {"temperature": _temp}
+    global _new_temp
+    _new_temp = value
+    return {"temperature": _new_temp}
