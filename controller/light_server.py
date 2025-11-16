@@ -1,10 +1,9 @@
 from typing import Optional
 import logging
-from random import choices
-from string import ascii_letters
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi_utils.tasks import repeat_every
 from bleak import BleakClient, BleakScanner
 
 logger = logging.getLogger(__name__)
@@ -18,8 +17,11 @@ BRIGHTNESS_UUID = "932c32bd-0003-47a2-835a-a8d455b859dd"
 TEMPERATURE_UUID = "932c32bd-0004-47a2-835a-a8d455b859dd"
 
 _is_on = True
-_brightness = 0
-_temp = 0
+_brightness = 130
+_temp = 130
+_new_is_on = _is_on
+_new_brightness = _brightness
+_new_temp = _temp
 client: Optional[BleakClient] = None
 
 
@@ -36,10 +38,42 @@ async def get_client():
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    # Startup: Connect once on startup
-    await get_client()
+    global _is_on, _brightness, _temp, _new_is_on, _new_brightness, _new_temp
+
+    # Startup
+    # Connect to the bulb
+    c = await get_client()
+
+    if c is not None:
+        try:
+            # Read current state from bulb
+            light_state = await c.read_gatt_char(LIGHT_UUID)
+            brightness_state = await c.read_gatt_char(BRIGHTNESS_UUID)
+            temp_state = await c.read_gatt_char(TEMPERATURE_UUID)
+
+            # Debug: Log raw byte values
+            logger.info(f"Raw values - Light: {light_state.hex()}, Brightness: {brightness_state.hex()}, Temp: {temp_state.hex()}")
+
+            # Parse the values (0x01 = on, 0x00 = off when reading from bulb)
+            # Note: Write logic is inverted (we write 0x00 to turn on, 0x01 to turn off)
+            _is_on = light_state[0] == 0x01
+            _brightness = brightness_state[0]
+            _temp = temp_state[0]
+
+            # Initialize the new values (used for periodic updates) to match current state
+            _new_is_on = _is_on
+            _new_brightness = _brightness
+            _new_temp = _temp
+
+            logger.info(f"Initial bulb state - On: {_is_on}, Brightness: {_brightness}, Temp: {_temp}")
+        except Exception as e:
+            logger.error(f"Failed to read initial bulb state: {e}")
+            logger.info("Using default values: On=True, Brightness=130, Temp=130")
+
+    # Start repeated task to update on/off/brightness/temp every 0.25s
+    await update_bulb()
     yield
-    # Shutdown: Disconnect if connected
+    # Shutdown: Disconnect from bulb
     if client and client.is_connected:
         await client.disconnect()
 
@@ -113,19 +147,28 @@ async def index():
             padding: 15px;
             font-size: 18px;
             margin: 10px 0;
-            background: #3e4451;
-            color: #abb2bf;
             border: none;
             border-radius: 8px;
             cursor: pointer;
             font-weight: 500;
-            transition: background 0.2s;
+            transition: all 0.2s;
         }
-        button:hover {
+        button.on {
+            background: #98c379;
+            color: #282c34;
+        }
+        button.on:hover {
+            background: #a8d389;
+        }
+        button.off {
+            background: #3e4451;
+            color: #abb2bf;
+        }
+        button.off:hover {
             background: #4b5263;
         }
         button:active {
-            background: #2c313c;
+            transform: scale(0.98);
         }
         .slider-container {
             background: #2c313c;
@@ -167,9 +210,9 @@ async def index():
         }
     </style>
 </head>
-<body>    
-    <button onclick="toggle()">Toggle On/Off</button>
-    
+<body>
+    <button id="toggle-btn" onclick="toggle()">Loading...</button>
+
     <div class="slider-container">
         <label>Brightness: <span id="bri-val">130</span></label>
         <input type="range" min="10" max="250" value="130" step="10" id="brightness"
@@ -185,9 +228,45 @@ async def index():
     <script>
         let lastBrightness = null;
         let lastTemperature = null;
+        let currentState = null;
 
-        function toggle() {
-            fetch('/toggle');
+        async function loadState() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+                currentState = data.is_on;
+
+                // Update button
+                updateToggleButton(currentState);
+
+                // Update sliders
+                document.getElementById('brightness').value = data.brightness;
+                document.getElementById('bri-val').textContent = data.brightness;
+                lastBrightness = data.brightness;
+
+                document.getElementById('temperature').value = data.temperature;
+                document.getElementById('temp-val').textContent = data.temperature;
+                lastTemperature = data.temperature;
+            } catch (error) {
+                console.error('Failed to load state:', error);
+            }
+        }
+
+        function updateToggleButton(isOn) {
+            const btn = document.getElementById('toggle-btn');
+            btn.textContent = 'Toggle On/Off';
+            btn.className = isOn ? 'on' : 'off';
+        }
+
+        async function toggle() {
+            try {
+                const response = await fetch('/toggle');
+                const data = await response.json();
+                currentState = data.state;
+                updateToggleButton(currentState);
+            } catch (error) {
+                console.error('Failed to toggle:', error);
+            }
         }
 
         function updateBrightness(val) {
@@ -207,57 +286,63 @@ async def index():
                 fetch('/temperature?value=' + rounded);
             }
         }
+
+        // Load initial state on page load
+        loadState();
     </script>
 </body>
 </html>
     """
 
 
-@app.get("/toggle")
-async def toggle():
-    global _is_on
-    x = "".join(choices(ascii_letters, k=4))
-    logger.info(f"{x}: toggle()")
+@repeat_every(seconds=0.25)
+async def update_bulb():
+    global _is_on, _brightness, _temp, _new_is_on, _new_brightness, _new_temp
+    print(f"{_is_on=}")
+    print(f"{_new_is_on=}")
     c = await get_client()
     if c is None:
-        logger.error(f"{x}: Failed to establish client connection.")
-        return {"state": _is_on}
-    await c.write_gatt_char(LIGHT_UUID, bytearray([0x00 if _is_on else 0x01]))
-    _is_on = not _is_on
-    return {"state": _is_on}
+        logger.error("Failed to establish client connection")
+    elif _is_on != _new_is_on:
+        signal = 0x01 if _new_is_on else 0x00
+        await c.write_gatt_char(LIGHT_UUID, bytearray([signal]))
+        logger.info(f"Toggled on/off state: {_is_on} -> {_new_is_on}")
+        _is_on = _new_is_on
+    elif _brightness != _new_brightness:
+        await c.write_gatt_char(BRIGHTNESS_UUID, bytearray([_new_brightness]))
+        logger.info(f"Brightness {_brightness} -> {_new_brightness}")
+        _brightness = _new_brightness
+    elif _temp != _new_temp:
+        await c.write_gatt_char(TEMPERATURE_UUID, bytearray([_new_temp, 0x01]))
+        logger.info(f"Changed temperature from {_temp} to {_new_temp}")
+        _temp = _new_temp
+
+
+@app.get("/status")
+async def status():
+    return {
+        "is_on": _new_is_on,
+        "brightness": _new_brightness,
+        "temperature": _new_temp,
+    }
+
+
+@app.get("/toggle")
+async def toggle():
+    global _new_is_on
+    _new_is_on = not _new_is_on
+    return {"state": _new_is_on}
 
 
 @app.get("/brightness")
 async def brightness(value: int):
-    global _brightness
-    x = "".join(choices(ascii_letters, k=4))
-    logger.info(f"{x}: brightness({value})")
-    c = await get_client()
-    if c is None:
-        logger.error(
-            f"{x}: brightness({value}): Failed to establish client connection."
-        )
-        return {"brightness": _brightness}
-    logger.info(f"brightness({value}): established client connection")
-    await c.write_gatt_char(BRIGHTNESS_UUID, bytearray([value]))
-    logger.info(f"{x}: Brightness: {_brightness} -> {value}")
-    _brightness = value
-    return {"brightness": _brightness}
+    global _new_brightness
+    _new_brightness = value
+    return {"brightness": _new_brightness}
 
 
 @app.get("/temperature")
 async def temperature(value: int):
-    global _temp
-    x = "".join(choices(ascii_letters, k=4))
-    logger.info(f"{x}: temperature({value})")
-    c = await get_client()
-    if c is None:
-        logger.error(
-            f"{x}: temperature({value}): Failed to establish client connection."
-        )
-        return {"temperature": _temp}
-    logger.info(f"{x}: temperature({value}): established client connection")
-    await c.write_gatt_char(TEMPERATURE_UUID, bytearray([value, 0x01]))
-    logger.info(f"{x}: Temperature: {_temp} -> {value}")
-    _temp = value
-    return {"temperature": _temp}
+    global _new_temp
+    _new_temp = value
+    return {"temperature": _new_temp}
