@@ -298,8 +298,6 @@ async def index():
 @repeat_every(seconds=0.25)
 async def update_bulb():
     global _is_on, _brightness, _temp, _new_is_on, _new_brightness, _new_temp
-    print(f"{_is_on=}")
-    print(f"{_new_is_on=}")
     c = await get_client()
     if c is None:
         logger.error("Failed to establish client connection")
